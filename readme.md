@@ -35,6 +35,23 @@ cd grok2api
 docker compose up -d
 ```
 
+如果你已经在本地构建过旧镜像、又更新了代码，建议改用：
+
+```bash
+docker compose up -d --build
+```
+
+> 当前仓库内的 `docker-compose.yml` 默认会本地构建镜像，并将服务暴露到 `34567` 端口。
+>
+> 如果要让容器内访问 Grok 自动复用宿主机代理，优先推荐在宿主机导出 `GROK2API_HOST_PROXY=http://127.0.0.1:11111` 后再执行 `docker compose up -d`。
+>
+> 也支持直接复用宿主机现有的 `ALL_PROXY` / `HTTPS_PROXY` / `HTTP_PROXY`。当代理地址是 `127.0.0.1` 或 `localhost` 时，服务会自动改写为容器内可访问的 `host.docker.internal`。
+
+```bash
+export GROK2API_HOST_PROXY=http://127.0.0.1:11111
+docker compose up -d --build
+```
+
 > Docker Compose 端口变量：
 >
 > - `SERVER_PORT`：容器内应用监听端口
@@ -43,6 +60,21 @@ docker compose up -d
 > 小贴士：端口映射规则是 `HOST_PORT:SERVER_PORT`，你访问的是 `HOST_PORT`，容器内服务实际监听的是 `SERVER_PORT`。
 >
 > 示例：`HOST_PORT=9000 SERVER_PORT=8011 docker compose up -d`，访问 `http://localhost:9000`。
+
+### Docker CLI 管理
+
+仓库新增了宿主机侧 CLI，用于管理运行在 Docker 中的 Grok2API 实例。CLI 本身只负责调度 Docker，不会在宿主机直接运行服务进程。
+
+完整运行与管理说明见 [docs/RUN.md](docs/RUN.md)。
+
+最短使用路径：
+
+```bash
+cd grok2api
+chmod +x ./grok2api
+./grok2api install
+grok2api list
+```
 
 ### Vercel 部署
 

@@ -30,6 +30,7 @@ from fastapi import Depends  # noqa: E402
 from app.core.auth import verify_api_key  # noqa: E402
 from app.core.config import config, get_config  # noqa: E402
 from app.core.logger import logger, setup_logging  # noqa: E402
+from app.core.proxy_env import build_proxy_bootstrap  # noqa: E402
 from app.core.exceptions import register_exception_handlers  # noqa: E402
 from app.core.response_middleware import ResponseLoggerMiddleware  # noqa: E402
 from app.api.v1.chat import router as chat_router  # noqa: E402
@@ -63,6 +64,15 @@ async def lifespan(app: FastAPI):
     # 2. 加载配置
     await config.ensure_loaded()
 
+    # 2.1 从环境变量自动引导代理配置（仅在当前配置为空时）
+    proxy_updates = build_proxy_bootstrap(
+        os.environ,
+        current_base_proxy=str(get_config("proxy.base_proxy_url", "") or ""),
+        current_asset_proxy=str(get_config("proxy.asset_proxy_url", "") or ""),
+    )
+    if proxy_updates:
+        await config.update({"proxy": proxy_updates})
+
     # 3. 启动服务显示
     logger.info("Starting Grok2API...")
     logger.info(f"Platform: {platform.system()} {platform.release()}")
@@ -81,16 +91,19 @@ async def lifespan(app: FastAPI):
     #    环境变量 FLARESOLVERR_URL 会作为初始值写入配置（兼容旧部署方式）
     _flaresolverr_env = os.getenv("FLARESOLVERR_URL", "")
     if _flaresolverr_env and not get_config("proxy.flaresolverr_url"):
-        await config.update({
-            "proxy": {
-                "enabled": True,
-                "flaresolverr_url": _flaresolverr_env,
-                "refresh_interval": int(os.getenv("CF_REFRESH_INTERVAL", "600")),
-                "timeout": int(os.getenv("CF_TIMEOUT", "60")),
+        await config.update(
+            {
+                "proxy": {
+                    "enabled": True,
+                    "flaresolverr_url": _flaresolverr_env,
+                    "refresh_interval": int(os.getenv("CF_REFRESH_INTERVAL", "600")),
+                    "timeout": int(os.getenv("CF_TIMEOUT", "60")),
+                }
             }
-        })
+        )
 
     from app.services.cf_refresh import start as cf_refresh_start
+
     cf_refresh_start()
 
     logger.info("Application startup complete.")
@@ -100,6 +113,7 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down Grok2API...")
 
     from app.services.cf_refresh import stop as cf_refresh_stop
+
     cf_refresh_stop()
 
     from app.core.storage import StorageFactory
@@ -170,7 +184,7 @@ def create_app() -> FastAPI:
     @app.get("/favicon.ico", include_in_schema=False)
     def favicon():
         return RedirectResponse(url="/static/common/img/favicon/favicon.ico")
-    
+
     # 健康检查接口（用于 Render、服务器保活检测等）
     @app.get("/health")
     def health():
@@ -179,7 +193,7 @@ def create_app() -> FastAPI:
         """
         return {"status": "ok"}
 
-    return app    
+    return app
 
 
 app = create_app()

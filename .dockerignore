@@ -7,10 +7,14 @@ __pycache__
 .env.*
 .git
 .gitignore
+.grok2api
 .logs
 logs
 /data
 /data/*
 /data/tmp
 /data/tmp/*
+/docs
+/clis
+/grok2api
 /tests

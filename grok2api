@@ -1,0 +1,124 @@
+#!/usr/bin/env sh
+set -eu
+
+SELF_PATH="$0"
+while [ -L "$SELF_PATH" ]; do
+    LINK_TARGET="$(readlink "$SELF_PATH")"
+    case "$LINK_TARGET" in
+        /*) SELF_PATH="$LINK_TARGET" ;;
+        *) SELF_PATH="$(dirname -- "$SELF_PATH")/$LINK_TARGET" ;;
+    esac
+done
+
+ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$SELF_PATH")" && pwd)"
+CLI_IMAGE="${GROK2API_CLI_IMAGE:-grok2api-cli:local}"
+CLI_PYTHON_VERSION="${GROK2API_CLI_PYTHON_VERSION:-3.11}"
+STATE_DIR="${GROK2API_STATE_DIR:-$ROOT_DIR/.grok2api}"
+CLI_CACHE_DIR="$STATE_DIR/build-cache/cli"
+
+install_cli() {
+    TARGET_DIR="${GROK2API_BIN_DIR:-}"
+    if [ -z "$TARGET_DIR" ]; then
+        for CANDIDATE in "$HOME/.local/bin" "$HOME/bin" "/usr/local/bin"; do
+            if [ -d "$CANDIDATE" ] && [ -w "$CANDIDATE" ]; then
+                TARGET_DIR="$CANDIDATE"
+                break
+            fi
+            if [ ! -e "$CANDIDATE" ] && mkdir -p "$CANDIDATE" 2>/dev/null; then
+                TARGET_DIR="$CANDIDATE"
+                break
+            fi
+        done
+    fi
+    if [ -z "$TARGET_DIR" ]; then
+        echo "unable to find a writable install directory; set GROK2API_BIN_DIR" >&2
+        exit 1
+    fi
+    mkdir -p "$TARGET_DIR"
+    ln -sf "$ROOT_DIR/grok2api" "$TARGET_DIR/grok2api"
+    echo "installed grok2api to $TARGET_DIR/grok2api"
+    case ":$PATH:" in
+        *":$TARGET_DIR:"*) ;;
+        *) echo "warning: $TARGET_DIR is not currently in PATH" >&2 ;;
+    esac
+}
+
+uninstall_cli() {
+    TARGET_DIR="${GROK2API_BIN_DIR:-$HOME/.local/bin}"
+    rm -f "$TARGET_DIR/grok2api"
+    echo "removed $TARGET_DIR/grok2api"
+}
+
+build_cli_image() {
+    mkdir -p "$CLI_CACHE_DIR"
+    if docker buildx version >/dev/null 2>&1; then
+        BUILDX_DRIVER="$(docker buildx inspect 2>/dev/null | awk '/^Driver:/ {print $2; exit}')"
+        if [ "$BUILDX_DRIVER" != "docker" ] && docker buildx build \
+            --load \
+            --build-arg "PYTHON_VERSION=$CLI_PYTHON_VERSION" \
+            --cache-from "type=local,src=$CLI_CACHE_DIR" \
+            --cache-to "type=local,dest=$CLI_CACHE_DIR,mode=max" \
+            -f "$ROOT_DIR/Dockerfile.cli" \
+            -t "$CLI_IMAGE" \
+            "$ROOT_DIR"; then
+            return 0
+        fi
+    fi
+
+    docker build \
+        -f "$ROOT_DIR/Dockerfile.cli" \
+        --build-arg "PYTHON_VERSION=$CLI_PYTHON_VERSION" \
+        -t "$CLI_IMAGE" \
+        "$ROOT_DIR"
+}
+
+case "${1:-}" in
+    install)
+        install_cli
+        exit 0
+        ;;
+    uninstall)
+        uninstall_cli
+        exit 0
+        ;;
+esac
+
+if ! command -v docker >/dev/null 2>&1; then
+    echo "docker is not installed or not in PATH" >&2
+    exit 1
+fi
+
+if [ "${GROK2API_CLI_REBUILD:-0}" = "1" ] || ! docker image inspect "$CLI_IMAGE" >/dev/null 2>&1; then
+    build_cli_image
+fi
+
+USER_ARGS=""
+if command -v id >/dev/null 2>&1; then
+    USER_ARGS="--user $(id -u):$(id -g)"
+fi
+
+GROUP_ARGS=""
+if [ -S /var/run/docker.sock ] && command -v stat >/dev/null 2>&1; then
+    DOCKER_GID="$(stat -c '%g' /var/run/docker.sock 2>/dev/null || true)"
+    if [ -n "$DOCKER_GID" ]; then
+        GROUP_ARGS="--group-add $DOCKER_GID"
+    fi
+fi
+
+exec docker run --rm -i \
+    $USER_ARGS \
+    $GROUP_ARGS \
+    -e "GROK2API_HOST_ROOT=$ROOT_DIR" \
+    -e GROK2API_HOST_PROXY \
+    -e GROK2API_HOST_ASSET_PROXY \
+    -e HTTP_PROXY \
+    -e HTTPS_PROXY \
+    -e ALL_PROXY \
+    -e http_proxy \
+    -e https_proxy \
+    -e all_proxy \
+    --add-host host.docker.internal:host-gateway \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    -v "$ROOT_DIR:/workspace" \
+    -w /workspace \
+    "$CLI_IMAGE" "$@"

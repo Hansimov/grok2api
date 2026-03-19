@@ -1,17 +1,32 @@
 services:
   grok2api:
     container_name: grok2api
-    image: ghcr.io/chenyme/grok2api:latest
+    build:
+      context: .
+    image: grok2api:local
     ports:
-      - "${HOST_PORT:-8000}:${SERVER_PORT:-8000}"
+      - "${HOST_PORT:-34567}:${SERVER_PORT:-8000}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
-      TZ: Asia/Shanghai
+      TZ: ${TZ:-Asia/Shanghai}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FILE_ENABLED: ${LOG_FILE_ENABLED:-true}
       SERVER_HOST: ${SERVER_HOST:-0.0.0.0}
       SERVER_PORT: ${SERVER_PORT:-8000}
       SERVER_WORKERS: ${SERVER_WORKERS:-1}
       SERVER_STORAGE_TYPE: ${SERVER_STORAGE_TYPE:-local}
       SERVER_STORAGE_URL: ${SERVER_STORAGE_URL:-}
+      DATA_DIR: /app/data
+      LOG_DIR: /app/logs
+      GROK2API_HOST_PROXY: ${GROK2API_HOST_PROXY:-}
+      GROK2API_HOST_ASSET_PROXY: ${GROK2API_HOST_ASSET_PROXY:-}
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      ALL_PROXY: ${ALL_PROXY:-}
+      http_proxy: ${http_proxy:-}
+      https_proxy: ${https_proxy:-}
+      all_proxy: ${all_proxy:-}
       # 启用 CF 自动刷新: 取消以下三行注释，并取消底部 flaresolverr 服务的注释
       # FLARESOLVERR_URL: http://flaresolverr:8191
       # CF_REFRESH_INTERVAL: "600"
@@ -22,12 +37,6 @@ services:
       #   Redis: redis://localhost:6379/0 or redis://:password@localhost:6379/0
       #   MySQL: mysql+aiomysql://user:pass@localhost/db
       #   PgSQL: postgresql+asyncpg://user:pass@localhost/db
-    command:
-      - sh
-      - -c
-      - >
-        granian --interface asgi --host "$${SERVER_HOST:-0.0.0.0}"
-        --port "$${SERVER_PORT:-8000}" --workers "$${SERVER_WORKERS:-1}" main:app
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs

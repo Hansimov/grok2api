@@ -1,0 +1,8 @@
+ARG PYTHON_VERSION=3.11
+FROM python:${PYTHON_VERSION}-alpine
+
+RUN apk add --no-cache docker-cli docker-cli-compose
+
+WORKDIR /workspace
+
+ENTRYPOINT ["python", "-m", "clis.manager"]

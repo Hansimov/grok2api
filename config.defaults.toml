@@ -202,3 +202,28 @@ concurrent = 100
 batch_size = 50
 # Usage 请求超时时间（秒）
 timeout = 60
+
+
+# ==================== CLI 默认配置（仅宿主机 Docker CLI 使用） ====================
+[cli.defaults]
+state_dir = ".grok2api"
+image = "grok2api:local"
+instance_name = "default"
+host_port = 34567
+container_port = 8000
+proxy = ""
+workers = 1
+storage_type = "local"
+storage_url = ""
+
+[cli.compose]
+restart = "unless-stopped"
+extra_hosts = ["host.docker.internal:host-gateway"]
+
+[cli.container_environment]
+TZ = "Asia/Shanghai"
+LOG_LEVEL = "INFO"
+LOG_FILE_ENABLED = "true"
+SERVER_HOST = "0.0.0.0"
+DATA_DIR = "/app/data"
+LOG_DIR = "/app/logs"

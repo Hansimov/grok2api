@@ -140,9 +140,7 @@ def _migrate_deprecated_config(
                         f"Migrated config: {old_path} -> {new_path} = {old_value}"
                     )
                 except Exception as e:
-                    logger.warning(
-                        f"Skip config migration for {old_path}: {e}"
-                    )
+                    logger.warning(f"Skip config migration for {old_path}: {e}")
                     continue
             if isinstance(result.get(old_section), dict):
                 result[old_section].pop(old_key, None)
@@ -228,7 +226,10 @@ def _load_defaults() -> Dict[str, Any]:
         return {}
     try:
         with DEFAULT_CONFIG_FILE.open("rb") as f:
-            return tomllib.load(f)
+            defaults = tomllib.load(f)
+            # Reserved for the host-side Docker CLI launcher, not runtime config.
+            defaults.pop("cli", None)
+            return defaults
     except Exception as e:
         logger.warning(f"Failed to load defaults from {DEFAULT_CONFIG_FILE}: {e}")
         return {}
@@ -309,9 +310,7 @@ class Config:
             # 或迁移了配置后需要更新
             # 保护：当远程存储返回 None 且本地也没有可迁移配置时，不覆盖远程配置，避免误重置。
             has_local_seed = bool(config_data)
-            allow_bootstrap_empty_remote = (
-                (not from_remote) and has_local_seed
-            )
+            allow_bootstrap_empty_remote = (not from_remote) and has_local_seed
             should_persist = (
                 allow_bootstrap_empty_remote
                 or (merged != config_data and bool(config_data))
