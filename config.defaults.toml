@@ -220,6 +220,14 @@ storage_url = ""
 restart = "unless-stopped"
 extra_hosts = ["host.docker.internal:host-gateway"]
 
+[cli.flaresolverr]
+enabled = true
+url = "http://flaresolverr:8191"
+image = "ghcr.io/flaresolverr/flaresolverr:latest"
+refresh_interval = 600
+timeout = 60
+log_level = "info"
+
 [cli.container_environment]
 TZ = "Asia/Shanghai"
 LOG_LEVEL = "INFO"

@@ -27,10 +27,9 @@ services:
       http_proxy: ${http_proxy:-}
       https_proxy: ${https_proxy:-}
       all_proxy: ${all_proxy:-}
-      # 启用 CF 自动刷新: 取消以下三行注释，并取消底部 flaresolverr 服务的注释
-      # FLARESOLVERR_URL: http://flaresolverr:8191
-      # CF_REFRESH_INTERVAL: "600"
-      # CF_TIMEOUT: "60"
+      FLARESOLVERR_URL: ${FLARESOLVERR_URL:-http://flaresolverr:8191}
+      CF_REFRESH_INTERVAL: ${CF_REFRESH_INTERVAL:-600}
+      CF_TIMEOUT: ${CF_TIMEOUT:-60}
 
       # SERVER_STORAGE_TYPE: (local, redis, mysql, pgsql) default: local
       # SERVER_STORAGE_URL: (local mode is empty) default: empty
@@ -40,6 +39,8 @@ services:
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
+    depends_on:
+      - flaresolverr
     restart: unless-stopped
 
   # 如果出口 IP 不干净，可取消以下注释使用 Warp 作为落地代理
@@ -55,13 +56,12 @@ services:
   #   cap_add:
   #     - NET_ADMIN
 
-  # 启用 CF 自动刷新时取消以下注释
-  # flaresolverr:
-  #   container_name: flaresolverr
-  #   image: ghcr.io/flaresolverr/flaresolverr:latest
-  #   ports:
-  #     - "127.0.0.1:8191:8191"
-  #   environment:
-  #     TZ: Asia/Shanghai
-  #     LOG_LEVEL: info
-  #   restart: unless-stopped
+  flaresolverr:
+    container_name: flaresolverr
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      LOG_LEVEL: ${FLARESOLVERR_LOG_LEVEL:-info}
+    restart: unless-stopped

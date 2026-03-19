@@ -64,6 +64,14 @@ proxy = "http://127.0.0.1:11111"
 - 设置宿主机代理
 - 覆盖默认端口
 - 覆盖默认镜像名
+- 覆盖默认 `flaresolverr` 行为
+
+例如禁用默认开启的 `flaresolverr`：
+
+```toml
+[flaresolverr]
+enabled = false
+```
 
 ## 代理连通方式
 
@@ -83,6 +91,44 @@ http://host.docker.internal:11111
 ```
 
 这样 Docker 实例中的 Grok 请求就能真正连到宿主机代理。
+
+注意：这一步并不等于容器可以访问宿主机 `127.0.0.1` 本身。
+
+在 Linux 上，如果你的代理程序只监听：
+
+```text
+127.0.0.1:11111
+```
+
+那么即使 CLI 自动把地址改写成：
+
+```text
+http://host.docker.internal:11111
+```
+
+容器里依然可能连不上。原因是：
+
+- `host.docker.internal` 指向的是宿主机网关地址，不是宿主机自己的 loopback
+- 只绑定在 `127.0.0.1` 的服务，通常不会接受来自 Docker bridge 网关地址的连接
+
+这时你需要让宿主机代理至少监听以下其中一种地址：
+
+- `0.0.0.0:11111`
+- 宿主机 Docker bridge 地址，例如 `172.17.0.1:11111`
+
+如果你不确定当前监听地址，可以在宿主机执行：
+
+```bash
+ss -ltn '( sport = :11111 )'
+```
+
+如果结果是：
+
+```text
+127.0.0.1:11111
+```
+
+那就说明这类错误正是监听地址导致的，而不是 Grok2API 的 API 鉴权问题。
 
 对于根目录的 `docker-compose.yml`，也支持以下方式：
 
@@ -120,6 +166,16 @@ grok2api start
 grok2api start demo --port 34568 --proxy http://127.0.0.1:11111
 ```
 
+显式控制 `flaresolverr`：
+
+```bash
+grok2api start demo --no-flaresolverr
+grok2api start demo --flaresolverr --flaresolverr-url http://flaresolverr:8191
+grok2api start demo --cf-refresh-interval 900 --cf-timeout 90
+grok2api restart demo --no-flaresolverr
+grok2api restart demo --flaresolverr-log-level debug
+```
+
 停止、重启、删除：
 
 ```bash
@@ -155,9 +211,21 @@ grok2api logs demo -f
 - 默认宿主机端口：`34567`
 - 默认容器端口：`8000`
 - 默认代理：关闭
+- 默认开启 `flaresolverr` sidecar
+- 默认 `flaresolverr` 地址：`http://flaresolverr:8191`
+- 默认 CF 刷新间隔：`600` 秒
+- 默认 CF 超时：`60` 秒
 - 如果配置了 `http://127.0.0.1:11111` 这类宿主机本地代理，CLI 或 Compose 启动流程都会自动改写成 `http://host.docker.internal:11111` 后写入容器配置
 - 实例数据目录：`.grok2api/instances/<name>/data`
 - 实例日志目录：`.grok2api/instances/<name>/logs`
+
+默认情况下，CLI 新生成的实例 compose 会同时包含：
+
+- `GROK2API_HOST_PROXY` / `GROK2API_HOST_ASSET_PROXY` 环境变量
+- `FLARESOLVERR_URL` / `CF_REFRESH_INTERVAL` / `CF_TIMEOUT` 环境变量
+- `flaresolverr` sidecar 服务
+
+第一次启动或第一次重建后，`cf_refresh` 需要一点时间完成挑战并把 `cf_clearance` 写入实例配置。在这段时间内，`chat/completions` 仍可能短暂返回 `403` 或 `502`。等日志中出现“刷新完成”后再测即可。
 
 ## 构建缓存
 
@@ -218,3 +286,12 @@ grok2api start cli-proxy-test --port 34570
 grok2api status cli-proxy-test
 grok2api remove cli-proxy-test
 ```
+
+在当前环境中，还额外验证了以下流程：
+
+```bash
+grok2api start default --port 34567
+python debugs/test_chat_completions.py
+```
+
+结果为：健康检查通过，`cf_refresh` 成功写入 `cf_clearance`，`chat/completions` 的非流式和流式都返回 `200`。

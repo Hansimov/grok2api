@@ -84,6 +84,7 @@ def main() -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     defaults = CLI_SETTINGS["defaults"]
+    flaresolverr_defaults = CLI_SETTINGS.get("flaresolverr", {})
     default_proxy = str(defaults.get("proxy", "")).strip() or resolve_proxy_from_env(
         os.environ
     )
@@ -156,6 +157,7 @@ def build_parser() -> argparse.ArgumentParser:
     start_parser.add_argument(
         "--rebuild", action="store_true", help="Build the image before starting"
     )
+    add_flaresolverr_arguments(start_parser, flaresolverr_defaults)
     start_parser.set_defaults(func=cmd_start)
 
     stop_parser = subparsers.add_parser("stop", help="Stop an instance")
@@ -164,6 +166,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     restart_parser = subparsers.add_parser("restart", help="Restart an instance")
     add_instance_argument(restart_parser)
+    add_flaresolverr_arguments(restart_parser, flaresolverr_defaults)
     restart_parser.set_defaults(func=cmd_restart)
 
     list_parser = subparsers.add_parser("list", help="List managed instances")
@@ -211,6 +214,74 @@ def add_instance_argument(parser: argparse.ArgumentParser) -> None:
         nargs="?",
         default=defaults["instance_name"],
         help="Instance name",
+    )
+
+
+def add_flaresolverr_arguments(
+    parser: argparse.ArgumentParser, defaults: dict[str, Any]
+) -> None:
+    parser.set_defaults(
+        flaresolverr_enabled=None,
+        flaresolverr_url=None,
+        flaresolverr_image=None,
+        cf_refresh_interval=None,
+        cf_timeout=None,
+        flaresolverr_log_level=None,
+    )
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--flaresolverr",
+        dest="flaresolverr_enabled",
+        action="store_true",
+        help="Enable the FlareSolverr sidecar for CF challenge solving",
+    )
+    group.add_argument(
+        "--no-flaresolverr",
+        dest="flaresolverr_enabled",
+        action="store_false",
+        help="Disable the FlareSolverr sidecar for this instance",
+    )
+    parser.add_argument(
+        "--flaresolverr-url",
+        default=None,
+        help=(
+            "FlareSolverr URL written into the Grok2API container "
+            f"(default: {defaults.get('url', 'http://flaresolverr:8191')})"
+        ),
+    )
+    parser.add_argument(
+        "--flaresolverr-image",
+        default=None,
+        help=(
+            "Docker image used for the FlareSolverr sidecar "
+            f"(default: {defaults.get('image', 'ghcr.io/flaresolverr/flaresolverr:latest')})"
+        ),
+    )
+    parser.add_argument(
+        "--cf-refresh-interval",
+        type=int,
+        default=None,
+        help=(
+            "CF refresh interval in seconds "
+            f"(default: {defaults.get('refresh_interval', 600)})"
+        ),
+    )
+    parser.add_argument(
+        "--cf-timeout",
+        type=int,
+        default=None,
+        help=(
+            "CF challenge timeout in seconds "
+            f"(default: {defaults.get('timeout', 60)})"
+        ),
+    )
+    parser.add_argument(
+        "--flaresolverr-log-level",
+        default=None,
+        help=(
+            "FlareSolverr container log level "
+            f"(default: {defaults.get('log_level', 'info')})"
+        ),
     )
 
 
@@ -274,6 +345,12 @@ def cmd_start(args: argparse.Namespace) -> int:
         api_key=args.api_key,
         function_key=args.function_key,
         app_url=args.app_url,
+        flaresolverr_enabled=args.flaresolverr_enabled,
+        flaresolverr_url=args.flaresolverr_url,
+        flaresolverr_image=args.flaresolverr_image,
+        cf_refresh_interval=args.cf_refresh_interval,
+        cf_timeout=args.cf_timeout,
+        flaresolverr_log_level=args.flaresolverr_log_level,
     )
 
     compose(instance, "up", "-d", "--force-recreate")
@@ -293,7 +370,24 @@ def cmd_stop(args: argparse.Namespace) -> int:
 
 def cmd_restart(args: argparse.Namespace) -> int:
     instance = load_instance(normalize_instance_name(args.name))
-    compose(instance, "restart")
+    apply_restart_overrides(instance, args)
+    write_instance_config(
+        data_dir=Path(instance["data_dir"]),
+        host_port=int(instance["host_port"]),
+        container_proxy_url=instance.get("container_proxy_url") or None,
+        app_key=None,
+        api_key=None,
+        function_key=None,
+        app_url=None,
+    )
+    compose_path = Path(instance["compose_file"])
+    compose_path.write_text(render_compose(instance), encoding="utf-8")
+    metadata_path = Path(instance["instance_dir"]) / "instance.json"
+    metadata_path.write_text(
+        json.dumps(instance, indent=2, ensure_ascii=True) + "\n",
+        encoding="utf-8",
+    )
+    compose(instance, "up", "-d", "--force-recreate", "--remove-orphans")
     print(f"Restarted instance {instance['name']}")
     return 0
 
@@ -406,8 +500,15 @@ def prepare_instance(
     api_key: str | None,
     function_key: str | None,
     app_url: str | None,
+    flaresolverr_enabled: bool | None,
+    flaresolverr_url: str | None,
+    flaresolverr_image: str | None,
+    cf_refresh_interval: int | None,
+    cf_timeout: int | None,
+    flaresolverr_log_level: str | None,
 ) -> dict[str, Any]:
     defaults = CLI_SETTINGS["defaults"]
+    flaresolverr_defaults = CLI_SETTINGS.get("flaresolverr", {})
     instance_dir = INSTANCES_DIR / name
     host_instance_dir = HOST_INSTANCES_DIR / name
     data_dir = instance_dir / "data"
@@ -458,6 +559,34 @@ def prepare_instance(
         "storage_type": storage_type,
         "storage_url": storage_url,
         "image": image,
+        "flaresolverr_enabled": (
+            bool(flaresolverr_defaults.get("enabled", True))
+            if flaresolverr_enabled is None
+            else bool(flaresolverr_enabled)
+        ),
+        "flaresolverr_url": str(
+            flaresolverr_url
+            or flaresolverr_defaults.get("url", "http://flaresolverr:8191")
+        ),
+        "flaresolverr_image": str(
+            flaresolverr_image
+            or flaresolverr_defaults.get(
+                "image", "ghcr.io/flaresolverr/flaresolverr:latest"
+            )
+        ),
+        "cf_refresh_interval": int(
+            cf_refresh_interval
+            if cf_refresh_interval is not None
+            else flaresolverr_defaults.get("refresh_interval", 600)
+        ),
+        "cf_timeout": int(
+            cf_timeout
+            if cf_timeout is not None
+            else flaresolverr_defaults.get("timeout", 60)
+        ),
+        "flaresolverr_log_level": str(
+            flaresolverr_log_level or flaresolverr_defaults.get("log_level", "info")
+        ),
     }
 
     compose_path.write_text(render_compose(instance), encoding="utf-8")
@@ -507,6 +636,8 @@ def write_instance_config(
     else:
         config = defaults
 
+    config.pop("cli", None)
+
     config.setdefault("app", {})
     config.setdefault("proxy", {})
     if container_proxy_url is not None:
@@ -551,16 +682,49 @@ def format_toml_value(value: Any) -> str:
         return "true" if value else "false"
     if isinstance(value, (int, float)):
         return str(value)
+    if isinstance(value, list):
+        inner = ", ".join(format_toml_value(item) for item in value)
+        return f"[{inner}]"
+    if isinstance(value, dict):
+        inner = ", ".join(
+            f"{key} = {format_toml_value(item)}" for key, item in value.items()
+        )
+        return f"{{{inner}}}"
     return json.dumps(value, ensure_ascii=False)
 
 
 def render_compose(instance: dict[str, Any]) -> str:
     compose_settings = CLI_SETTINGS["compose"]
+    flaresolverr_settings = CLI_SETTINGS.get("flaresolverr", {})
     container_environment = deepcopy(CLI_SETTINGS["container_environment"])
     container_environment["SERVER_PORT"] = str(instance["container_port"])
     container_environment["SERVER_WORKERS"] = str(instance["workers"])
     container_environment["SERVER_STORAGE_TYPE"] = instance["storage_type"]
     container_environment["SERVER_STORAGE_URL"] = instance["storage_url"]
+    if instance["host_proxy_url"]:
+        container_environment["GROK2API_HOST_PROXY"] = instance["host_proxy_url"]
+        container_environment["GROK2API_HOST_ASSET_PROXY"] = instance["host_proxy_url"]
+
+    flaresolverr_enabled = bool(
+        instance.get("flaresolverr_enabled", flaresolverr_settings.get("enabled", True))
+    )
+    if flaresolverr_enabled:
+        container_environment["FLARESOLVERR_URL"] = str(
+            instance.get(
+                "flaresolverr_url",
+                flaresolverr_settings.get("url", "http://flaresolverr:8191"),
+            )
+        )
+        container_environment["CF_REFRESH_INTERVAL"] = str(
+            instance.get(
+                "cf_refresh_interval",
+                flaresolverr_settings.get("refresh_interval", 600),
+            )
+        )
+        container_environment["CF_TIMEOUT"] = str(
+            instance.get("cf_timeout", flaresolverr_settings.get("timeout", 60))
+        )
+
     data_volume = f"{instance['host_data_dir']}:/app/data"
     logs_volume = f"{instance['host_logs_dir']}:/app/logs"
 
@@ -572,6 +736,14 @@ def render_compose(instance: dict[str, Any]) -> str:
         "    ports:",
         f"      - \"{instance['host_port']}:{instance['container_port']}\"",
     ]
+
+    if flaresolverr_enabled:
+        lines.extend(
+            [
+                "    depends_on:",
+                "      - flaresolverr",
+            ]
+        )
 
     extra_hosts = compose_settings.get("extra_hosts", [])
     if extra_hosts:
@@ -591,7 +763,47 @@ def render_compose(instance: dict[str, Any]) -> str:
             f"    restart: {compose_settings['restart']}",
         ]
     )
+
+    if flaresolverr_enabled:
+        lines.extend(
+            [
+                "",
+                "  flaresolverr:",
+                f"    container_name: flaresolverr-{instance['name']}",
+                f"    image: {instance.get('flaresolverr_image', flaresolverr_settings.get('image', 'ghcr.io/flaresolverr/flaresolverr:latest'))}",
+            ]
+        )
+
+        if extra_hosts:
+            lines.append("    extra_hosts:")
+            for extra_host in extra_hosts:
+                lines.append(f"      - {quote_yaml(str(extra_host))}")
+
+        lines.extend(
+            [
+                "    environment:",
+                f"      TZ: {quote_yaml(str(container_environment.get('TZ', 'Asia/Shanghai')))}",
+                f"      LOG_LEVEL: {quote_yaml(str(instance.get('flaresolverr_log_level', flaresolverr_settings.get('log_level', 'info'))))}",
+                f"    restart: {compose_settings['restart']}",
+            ]
+        )
+
     return "\n".join(lines) + "\n"
+
+
+def apply_restart_overrides(instance: dict[str, Any], args: argparse.Namespace) -> None:
+    if getattr(args, "flaresolverr_enabled", None) is not None:
+        instance["flaresolverr_enabled"] = bool(args.flaresolverr_enabled)
+    if getattr(args, "flaresolverr_url", None):
+        instance["flaresolverr_url"] = str(args.flaresolverr_url)
+    if getattr(args, "flaresolverr_image", None):
+        instance["flaresolverr_image"] = str(args.flaresolverr_image)
+    if getattr(args, "cf_refresh_interval", None) is not None:
+        instance["cf_refresh_interval"] = int(args.cf_refresh_interval)
+    if getattr(args, "cf_timeout", None) is not None:
+        instance["cf_timeout"] = int(args.cf_timeout)
+    if getattr(args, "flaresolverr_log_level", None):
+        instance["flaresolverr_log_level"] = str(args.flaresolverr_log_level)
 
 
 def quote_yaml(value: str) -> str:

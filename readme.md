@@ -46,6 +46,8 @@ docker compose up -d --build
 > 如果要让容器内访问 Grok 自动复用宿主机代理，优先推荐在宿主机导出 `GROK2API_HOST_PROXY=http://127.0.0.1:11111` 后再执行 `docker compose up -d`。
 >
 > 也支持直接复用宿主机现有的 `ALL_PROXY` / `HTTPS_PROXY` / `HTTP_PROXY`。当代理地址是 `127.0.0.1` 或 `localhost` 时，服务会自动改写为容器内可访问的 `host.docker.internal`。
+>
+> Linux 额外注意：如果你的代理程序只监听在 `127.0.0.1:11111`，容器里仍可能无法连接。此时请让代理监听 `0.0.0.0:11111` 或宿主机 Docker bridge 地址；完整说明见 [docs/RUN.md](docs/RUN.md)。
 
 ```bash
 export GROK2API_HOST_PROXY=http://127.0.0.1:11111

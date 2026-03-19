@@ -52,6 +52,24 @@ def json_dumps_sorted(obj: Any) -> str:
     return orjson.dumps(obj, option=orjson.OPT_SORT_KEYS).decode("utf-8")
 
 
+def toml_dumps_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, str):
+        return json_dumps(value)
+    if isinstance(value, list):
+        inner = ", ".join(toml_dumps_value(item) for item in value)
+        return f"[{inner}]"
+    if isinstance(value, dict):
+        inner = ", ".join(
+            f"{key} = {toml_dumps_value(item)}" for key, item in value.items()
+        )
+        return f"{{{inner}}}"
+    return json_dumps(str(value))
+
+
 def has_token_entries(data: Any) -> bool:
     """Return True when the payload contains at least one non-empty token."""
     if not isinstance(data, dict):
@@ -134,9 +152,7 @@ class BaseStorage(abc.ABC):
                 continue
             pool_list = existing.setdefault(pool_name, [])
             normalized = {
-                k: v
-                for k, v in item.items()
-                if k not in ("pool_name", "_update_kind")
+                k: v for k, v in item.items() if k not in ("pool_name", "_update_kind")
             }
             replaced = False
             for idx, current in enumerate(pool_list):
@@ -253,17 +269,7 @@ class LocalStorage(BaseStorage):
                     continue
                 lines.append(f"[{section}]")
                 for key, val in items.items():
-                    if isinstance(val, bool):
-                        val_str = "true" if val else "false"
-                    elif isinstance(val, str):
-                        # Use JSON string escaping to keep TOML valid for multiline/control chars.
-                        val_str = json_dumps(val)
-                    elif isinstance(val, (int, float)):
-                        val_str = str(val)
-                    elif isinstance(val, (list, dict)):
-                        val_str = json_dumps(val)
-                    else:
-                        val_str = f'"{str(val)}"'
+                    val_str = toml_dumps_value(val)
                     lines.append(f"{key} = {val_str}")
                 lines.append("")
 
@@ -619,7 +625,8 @@ class SQLStorage(BaseStorage):
 
                 # Tokens 表 (通用 SQL)
                 await conn.execute(
-                    text("""
+                    text(
+                        """
                     CREATE TABLE IF NOT EXISTS tokens (
                         token VARCHAR(512) PRIMARY KEY,
                         pool_name VARCHAR(64) NOT NULL,
@@ -639,19 +646,22 @@ class SQLStorage(BaseStorage):
                         data_hash CHAR(64),
                         updated_at BIGINT
                     )
-                """)
+                """
+                    )
                 )
 
                 # 配置表
                 await conn.execute(
-                    text("""
+                    text(
+                        """
                     CREATE TABLE IF NOT EXISTS app_config (
                         section VARCHAR(64) NOT NULL,
                         key_name VARCHAR(64) NOT NULL,
                         value TEXT,
                         PRIMARY KEY (section, key_name)
                     )
-                """)
+                """
+                    )
                 )
 
                 # 索引
@@ -764,7 +774,9 @@ class SQLStorage(BaseStorage):
             return tags
         return []
 
-    def _token_to_row(self, token_data: Dict[str, Any], pool_name: str) -> Dict[str, Any]:
+    def _token_to_row(
+        self, token_data: Dict[str, Any], pool_name: str
+    ) -> Dict[str, Any]:
         token_str = token_data.get("token")
         if isinstance(token_str, str) and token_str.startswith("sso="):
             token_str = token_str[4:]
@@ -1059,9 +1071,7 @@ class SQLStorage(BaseStorage):
                         if note is not None:
                             token_data["note"] = note
                         if last_asset_clear_at is not None:
-                            token_data["last_asset_clear_at"] = int(
-                                last_asset_clear_at
-                            )
+                            token_data["last_asset_clear_at"] = int(last_asset_clear_at)
 
                         legacy_data = None
                         if data_json:
